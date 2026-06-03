@@ -509,13 +509,14 @@ def render_controls() -> None:
 
     elif phase == "low_score_choice":
         st.write("Sélectionne le score exact.")
-        cols = st.columns(3)
-        for index, label in enumerate(LOW_SCORES):
-            with cols[index % 3]:
-                if st.button(label, use_container_width=True):
-                    score = 0 if label == "Hors-temps" else int(label)
-                    save_score(label, score)
-                    st.rerun()
+        # Sur téléphone, les colonnes Streamlit s'empilent colonne par colonne.
+        # On garde donc des boutons pleine largeur pour conserver l'ordre :
+        # 8, 7, 6, 5, 4, 3, 2, 1, Hors-temps.
+        for label in LOW_SCORES:
+            if st.button(label, use_container_width=True, key=f"low_score_{label}"):
+                score = 0 if label == "Hors-temps" else int(label)
+                save_score(label, score)
+                st.rerun()
 
     elif phase == "series_finished":
         st.success("Série arrêtée. Tu veux en commencer une autre ?")

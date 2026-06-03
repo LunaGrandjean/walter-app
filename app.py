@@ -441,7 +441,7 @@ def render_status() -> None:
         st.info(
             f"{st.session_state.current_aim_type} | "
             f"Repos enregistré : {fmt_seconds(st.session_state.pending_rest_seconds)} | "
-            f"Chrono visée : {fmt_seconds(elapsed_seconds(st.session_state.aim_start))}"
+            f"Chrono visée commencé"
         )
     elif phase in {"score_choice", "low_score_choice"}:
         st.info(f"Temps de visée enregistré : {fmt_seconds(st.session_state.pending_aim_seconds)}")

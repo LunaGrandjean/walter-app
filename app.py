@@ -436,7 +436,7 @@ def render_status() -> None:
         st.caption(f"Série actuelle : {st.session_state.current_series}")
 
     if phase == "rest_running":
-        st.info(f"Chrono repos du prochain tir : {fmt_seconds(elapsed_seconds(st.session_state.rest_start))}")
+        st.info(f"Chrono repos du prochain tir commencé")
     elif phase == "aim_running":
         st.info(
             f"{st.session_state.current_aim_type} | "

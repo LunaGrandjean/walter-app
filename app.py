@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import base64
 import io
 import time
 from datetime import date, datetime
 from typing import Any
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -24,6 +26,139 @@ DISPLAY_RENAME = {
     "Resultat": "Résultat",
     "Temps visee secondes": "Temps visée secondes",
 }
+
+
+def asset_data_uri(filename: str, mime: str) -> str:
+    """Retourne une image en base64 pour l'utiliser en CSS/HTML Streamlit."""
+    path = Path(__file__).parent / filename
+    if not path.exists():
+        return ""
+    encoded = base64.b64encode(path.read_bytes()).decode("utf-8")
+    return f"data:{mime};base64,{encoded}"
+
+
+def inject_design() -> None:
+    background = asset_data_uri("image_fond_acceuil.png", "image/png")
+    fftir_logo = asset_data_uri("FFTir_Logo.png", "image/png")
+    france_logo = asset_data_uri("logo_france_sport.svg", "image/svg+xml")
+
+    if background:
+        background_css = "background-image: linear-gradient(rgba(2, 8, 22, 0.35), rgba(2, 8, 22, 0.75)), url('" + background + "');"
+    else:
+        background_css = "background: linear-gradient(135deg, #050b18, #081d3d);"
+
+    top_logo_html = f'<img class="app-logo-top" src="{fftir_logo}" />' if fftir_logo else ""
+    bottom_logo_html = f'<img class="app-logo-bottom" src="{france_logo}" />' if france_logo else ""
+
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+            --blue: #2448d8;
+            --red: #ff244f;
+            --card: rgba(4, 13, 31, 0.76);
+            --border: rgba(170, 200, 255, 0.28);
+            --text: #f7f9ff;
+            --muted: rgba(247, 249, 255, 0.72);
+        }}
+        html, body, [data-testid="stAppViewContainer"] {{
+            {background_css}
+            background-size: cover;
+            background-position: center center;
+            background-attachment: fixed;
+            color: var(--text);
+        }}
+        [data-testid="stHeader"], [data-testid="stToolbar"] {{ background: transparent; }}
+        .block-container {{
+            max-width: 780px;
+            padding-top: 5.2rem;
+            padding-left: 0.9rem;
+            padding-right: 0.9rem;
+            padding-bottom: 7.2rem;
+        }}
+        .app-logo-top {{
+            position: fixed;
+            top: 0.75rem;
+            right: 0.8rem;
+            width: min(150px, 34vw);
+            z-index: 999;
+            filter: drop-shadow(0 8px 18px rgba(0,0,0,0.55));
+        }}
+        .app-logo-bottom {{
+            position: fixed;
+            right: 0.75rem;
+            bottom: 0.65rem;
+            width: min(155px, 36vw);
+            z-index: 998;
+            opacity: 0.95;
+            filter: drop-shadow(0 8px 18px rgba(0,0,0,0.65));
+            pointer-events: none;
+        }}
+        .main-title {{
+            text-align: center;
+            font-size: clamp(2rem, 7vw, 3.2rem);
+            line-height: 1.05;
+            font-weight: 900;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            margin: 0.2rem 0 1.2rem;
+            text-shadow: 0 4px 18px rgba(0,0,0,0.85);
+        }}
+        .mobile-card, .stAlert, div[data-testid="stExpander"] details {{
+            border: 1px solid var(--border) !important;
+            border-radius: 22px !important;
+            background: var(--card) !important;
+            box-shadow: 0 14px 34px rgba(0, 0, 0, 0.34);
+            backdrop-filter: blur(10px);
+        }}
+        .mobile-card {{ padding: 1rem; margin-bottom: 1rem; }}
+        .controls-card {{ position: sticky; top: 0.4rem; z-index: 10; }}
+        h1, h2, h3, p, label, span, .stMarkdown, .stCaption {{ color: var(--text) !important; }}
+        [data-testid="stCaptionContainer"], small {{ color: var(--muted) !important; }}
+        input, textarea {{
+            background: rgba(5, 18, 42, 0.82) !important;
+            border: 1px solid rgba(210, 225, 255, 0.35) !important;
+            border-radius: 14px !important;
+            color: white !important;
+        }}
+        div.stButton > button, div.stDownloadButton > button {{
+            min-height: 4rem;
+            font-size: 1.08rem;
+            font-weight: 900;
+            border-radius: 16px;
+            white-space: normal;
+            border: 1px solid rgba(255,255,255,0.22);
+            box-shadow: 0 12px 22px rgba(0,0,0,0.35);
+        }}
+        div.stButton > button[kind="primary"], div.stDownloadButton > button[kind="primary"] {{
+            background: linear-gradient(135deg, #123aa4, #3266ff);
+            color: white;
+        }}
+        div.stButton > button[kind="secondary"] {{
+            background: linear-gradient(135deg, rgba(12, 25, 52, 0.95), rgba(35, 55, 92, 0.95));
+            color: white;
+        }}
+        [data-testid="stMetric"] {{
+            background: rgba(7, 19, 43, 0.74);
+            border: 1px solid rgba(170, 200, 255, 0.20);
+            border-radius: 16px;
+            padding: 0.75rem;
+        }}
+        [data-testid="stMetricValue"] {{ font-size: 1.45rem; color: white !important; }}
+        hr {{ border-color: rgba(255,255,255,0.16); }}
+        @media (max-width: 640px) {{
+            .block-container {{ padding-left: 0.55rem; padding-right: 0.55rem; padding-top: 4.7rem; }}
+            div[data-testid="column"] {{ width: 100% !important; flex: 1 1 100% !important; }}
+            div.stButton > button, div.stDownloadButton > button {{ min-height: 4.35rem; font-size: 1.03rem; }}
+            .app-logo-top {{ width: 120px; }}
+            .app-logo-bottom {{ width: 125px; }}
+        }}
+        </style>
+        {top_logo_html}
+        {bottom_logo_html}
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def init_state() -> None:
@@ -458,59 +593,9 @@ def render_reset_zone() -> None:
 def main() -> None:
     st.set_page_config(page_title="Suivi match", page_icon="🎯", layout="centered")
     init_state()
+    inject_design()
 
-    st.markdown(
-        """
-        <style>
-        .block-container {
-            max-width: 760px;
-            padding-top: 1rem;
-            padding-left: 0.8rem;
-            padding-right: 0.8rem;
-        }
-        .mobile-card {
-            border: 1px solid rgba(128, 128, 128, 0.25);
-            border-radius: 18px;
-            padding: 1rem;
-            margin-bottom: 1rem;
-            background: rgba(250, 250, 250, 0.03);
-        }
-        .controls-card {
-            position: sticky;
-            top: 0.4rem;
-            z-index: 10;
-            backdrop-filter: blur(8px);
-        }
-        div.stButton > button, div.stDownloadButton > button {
-            min-height: 3.8rem;
-            font-size: 1.08rem;
-            font-weight: 800;
-            border-radius: 14px;
-            white-space: normal;
-        }
-        [data-testid="stMetricValue"] {
-            font-size: 1.45rem;
-        }
-        @media (max-width: 640px) {
-            .block-container {
-                padding-left: 0.55rem;
-                padding-right: 0.55rem;
-            }
-            div[data-testid="column"] {
-                width: 100% !important;
-                flex: 1 1 100% !important;
-            }
-            div.stButton > button, div.stDownloadButton > button {
-                min-height: 4.2rem;
-                font-size: 1.05rem;
-            }
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.title("🎯 Suivi de match")
+    st.markdown('<div class="main-title">Suivi de match</div>', unsafe_allow_html=True)
     render_session_form()
     render_status()
     render_controls()

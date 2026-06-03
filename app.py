@@ -1,506 +1,261 @@
-from __future__ import annotations
-
-import io
-import time
-from datetime import date, datetime
-from typing import Any
-
-import pandas as pd
 import streamlit as st
+import pandas as pd
+from datetime import datetime
+from io import BytesIO
+import time
 
+st.set_page_config(page_title="Suivi tir sportif", page_icon="🎯", layout="wide")
 
-RESULTS = ["X", "10", "9", "8 et -"]
-PHASE_LABELS = {
-    "no_series": "Pas de série en cours",
-    "series_ready": "Série en cours - prêt pour le repos",
-    "rest_running": "Repos en cours",
-    "aim_running": "Visée en cours",
-    "series_finished": "Série terminée",
-    "session_finished": "Session terminée",
-}
-DISPLAY_RENAME = {
-    "Serie": "Série",
-    "Resultat": "Résultat",
-    "Temps visee secondes": "Temps visée secondes",
-}
+# -------------------------
+# Helpers
+# -------------------------
 
-
-def init_state() -> None:
-    defaults: dict[str, Any] = {
-        "athlete_name": "",
-        "session_date": date.today(),
+def init_state():
+    defaults = {
+        "events": [],
+        "current_block": 1,
+        "current_series": 1,
+        "phase": "idle",  # idle, rest, aim
+        "phase_start": None,
+        "last_rest_seconds": 0,
+        "session_started": False,
+        "shooter": "",
         "competition": "",
-        "session_comment": "",
-        "actions": [],
-        "current_series": 0,
-        "phase": "no_series",
-        "rest_start": None,
-        "aim_start": None,
-        "pending_rest_seconds": None,
-        "pending_x_index": None,
-        "confirm_reset": False,
+        "session_date": datetime.today().date(),
     }
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
 
-def reset_session() -> None:
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
-    init_state()
+def elapsed_seconds():
+    if st.session_state.phase_start is None:
+        return 0
+    return int(time.time() - st.session_state.phase_start)
 
 
-def elapsed_seconds(start: float | None) -> float:
-    if start is None:
-        return 0.0
-    return max(0.0, time.time() - start)
+def score_value(result: str) -> int:
+    if result in ["X", "10"]:
+        return 10
+    return int(result)
 
 
-def fmt_seconds(value: float | int | None) -> str:
-    if value is None:
-        return "-"
-    return f"{float(value):.1f} s"
-
-
-def actions_df(actions: list[dict[str, Any]] | None = None) -> pd.DataFrame:
-    data = st.session_state.actions if actions is None else actions
-    columns = [
-        "Serie",
-        "Action n°",
-        "Type action",
-        "Resultat",
-        "Score",
-        "Temps repos secondes",
-        "Temps visee secondes",
-        "Horodatage",
-    ]
-    return pd.DataFrame(data, columns=columns)
-
-
-def display_actions_df(actions: list[dict[str, Any]] | None = None) -> pd.DataFrame:
-    return actions_df(actions).rename(columns=DISPLAY_RENAME)
-
-
-def current_series_actions() -> list[dict[str, Any]]:
-    serie = st.session_state.current_series
-    return [a for a in st.session_state.actions if a["Serie"] == serie]
-
-
-def next_action_number() -> int:
-    return len(current_series_actions()) + 1
-
-
-def start_next_rest() -> None:
-    st.session_state.rest_start = time.time()
-    st.session_state.aim_start = None
-    st.session_state.pending_rest_seconds = None
-    st.session_state.phase = "rest_running"
-
-
-def make_action(
-    result: str,
-    score: float | int | None,
-    action_type: str,
-    aim_seconds: float | None = None,
-) -> dict[str, Any]:
-    return {
-        "Serie": st.session_state.current_series,
-        "Action n°": next_action_number(),
-        "Type action": action_type,
-        "Resultat": result,
-        "Score": score,
-        "Temps repos secondes": round(float(st.session_state.pending_rest_seconds or 0), 2),
-        "Temps visee secondes": round(
-            elapsed_seconds(st.session_state.aim_start) if aim_seconds is None else aim_seconds,
-            2,
-        ),
-        "Horodatage": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
-
-
-def add_action(result: str, score: float | int | None, action_type: str) -> None:
-    st.session_state.actions.append(make_action(result, score, action_type))
-    start_next_rest()
-
-
-def add_pending_x() -> None:
-    action = make_action("X", None, "Tir validé", elapsed_seconds(st.session_state.aim_start))
-    st.session_state.actions.append(action)
-    st.session_state.pending_x_index = len(st.session_state.actions) - 1
-    start_next_rest()
-
-
-def has_pending_x() -> bool:
-    index = st.session_state.pending_x_index
-    return (
-        isinstance(index, int)
-        and 0 <= index < len(st.session_state.actions)
-        and st.session_state.actions[index]["Resultat"] == "X"
-        and st.session_state.actions[index]["Score"] is None
+def current_series_score():
+    return sum(
+        e["Score"]
+        for e in st.session_state.events
+        if e["Bloc"] == st.session_state.current_block
+        and e["Série"] == st.session_state.current_series
+        and e["Type"] == "Tir validé"
     )
 
 
-def validate_pending_x(score: float) -> None:
-    if has_pending_x():
-        st.session_state.actions[st.session_state.pending_x_index]["Score"] = round(score, 1)
-    st.session_state.pending_x_index = None
+def current_series_shots():
+    return sum(
+        1
+        for e in st.session_state.events
+        if e["Bloc"] == st.session_state.current_block
+        and e["Série"] == st.session_state.current_series
+        and e["Type"] == "Tir validé"
+    )
 
 
-def start_new_series() -> None:
-    st.session_state.current_series += 1
-    start_next_rest()
-
-
-def switch_to_aim() -> None:
-    st.session_state.pending_rest_seconds = elapsed_seconds(st.session_state.rest_start)
-    st.session_state.aim_start = time.time()
-    st.session_state.phase = "aim_running"
-
-
-def finish_series() -> None:
-    st.session_state.phase = "series_finished"
-    st.session_state.rest_start = None
-    st.session_state.aim_start = None
-    st.session_state.pending_rest_seconds = None
-
-
-def undo_last_action() -> None:
-    if st.session_state.actions:
-        last_index = len(st.session_state.actions) - 1
-        if st.session_state.pending_x_index == last_index:
-            st.session_state.pending_x_index = None
-        st.session_state.actions.pop()
-
-
-def series_summary(actions: list[dict[str, Any]]) -> dict[str, Any]:
-    if not actions:
-        return {
-            "Score total": 0,
-            "Tirs validés": 0,
-            "Nombre de X": 0,
-            "Temps total repos": 0.0,
-            "Temps total visée": 0.0,
-            "Temps moyen repos": 0.0,
-            "Temps moyen visée": 0.0,
-        }
-
-    valid_shots = [a for a in actions if a["Resultat"] != "R"]
-    rest_times = [float(a["Temps repos secondes"]) for a in actions]
-    aim_times = [float(a["Temps visee secondes"]) for a in actions]
-    score_total = sum(float(a["Score"] or 0) for a in valid_shots)
-    return {
-        "Score total": round(score_total, 2),
-        "Tirs validés": len(valid_shots),
-        "Nombre de X": sum(1 for a in valid_shots if a["Resultat"] == "X"),
-        "Temps total repos": round(sum(rest_times), 2),
-        "Temps total visée": round(sum(aim_times), 2),
-        "Temps moyen repos": round(sum(rest_times) / len(rest_times), 2),
-        "Temps moyen visée": round(sum(aim_times) / len(aim_times), 2),
-    }
-
-
-def all_series_summary_df() -> pd.DataFrame:
-    rows = []
-    for serie in range(1, st.session_state.current_series + 1):
-        serie_actions = [a for a in st.session_state.actions if a["Serie"] == serie]
-        summary = series_summary(serie_actions)
-        rows.append(
-            {
-                "Série": serie,
-                "Score total": summary["Score total"],
-                "Tirs validés": summary["Tirs validés"],
-                "Nombre de X": summary["Nombre de X"],
-                "Temps total repos": summary["Temps total repos"],
-                "Temps total visée": summary["Temps total visée"],
-                "Temps moyen repos": summary["Temps moyen repos"],
-                "Temps moyen visée": summary["Temps moyen visée"],
-            }
-        )
-    return pd.DataFrame(rows)
-
-
-def session_summary() -> dict[str, Any]:
-    summaries = all_series_summary_df()
-    actions = st.session_state.actions
-    rest_times = [float(a["Temps repos secondes"]) for a in actions]
-    aim_times = [float(a["Temps visee secondes"]) for a in actions]
-    score_total = float(summaries["Score total"].sum()) if not summaries.empty else 0.0
-    total_series = st.session_state.current_series
-    return {
-        "Athlète": st.session_state.athlete_name,
-        "Date": st.session_state.session_date.isoformat()
-        if hasattr(st.session_state.session_date, "isoformat")
-        else str(st.session_state.session_date),
+def add_event(event_type, result="", rest_seconds=0, aim_seconds=0, score=0):
+    st.session_state.events.append({
+        "Date": str(st.session_state.session_date),
+        "Tireur": st.session_state.shooter,
         "Compétition": st.session_state.competition,
-        "Nombre total de séries": total_series,
-        "Score total": round(score_total, 2),
-        "Tirs validés": int(summaries["Tirs validés"].sum()) if not summaries.empty else 0,
-        "Nombre total de X": int(summaries["Nombre de X"].sum()) if not summaries.empty else 0,
-        "Moyenne par série": round(score_total / total_series, 2) if total_series else 0.0,
-        "Temps moyen repos global": round(sum(rest_times) / len(rest_times), 2)
-        if rest_times
-        else 0.0,
-        "Temps moyen visée global": round(sum(aim_times) / len(aim_times), 2) if aim_times else 0.0,
-        "Commentaire": st.session_state.session_comment,
-    }
+        "Bloc": st.session_state.current_block,
+        "Série": st.session_state.current_series,
+        "N° action": len(st.session_state.events) + 1,
+        "Type": event_type,
+        "Résultat": result,
+        "Temps repos (s)": rest_seconds,
+        "Temps visée/tir (s)": aim_seconds,
+        "Score": score,
+        "Horodatage": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    })
 
 
-def excel_bytes() -> bytes:
-    actions = display_actions_df().copy()
-    if not actions.empty:
-        actions.insert(0, "Athlète", st.session_state.athlete_name)
-        actions.insert(
-            1,
-            "Date",
-            st.session_state.session_date.isoformat()
-            if hasattr(st.session_state.session_date, "isoformat")
-            else str(st.session_state.session_date),
-        )
-        actions.insert(2, "Compétition", st.session_state.competition)
-        actions["Commentaire session"] = st.session_state.session_comment
-    else:
-        actions = pd.DataFrame(
-            columns=[
-                "Athlète",
-                "Date",
-                "Compétition",
-                "Série",
-                "Action n°",
-                "Type action",
-                "Résultat",
-                "Score",
-                "Temps repos secondes",
-                "Temps visée secondes",
-                "Horodatage",
-                "Commentaire session",
-            ]
-        )
+def go_next_series():
+    if st.session_state.current_series < 6:
+        st.session_state.current_series += 1
+        st.session_state.current_block = ((st.session_state.current_series - 1) // 2) + 1
+    st.session_state.phase = "idle"
+    st.session_state.phase_start = None
+    st.session_state.last_rest_seconds = 0
 
-    session_rows = [{"Information": key, "Valeur": value} for key, value in session_summary().items()]
-    output = io.BytesIO()
+
+def make_excel():
+    detail = pd.DataFrame(st.session_state.events)
+
+    summary_rows = []
+    total_general = 0
+    for s in range(1, 7):
+        b = ((s - 1) // 2) + 1
+        score = int(detail[(detail["Série"] == s) & (detail["Type"] == "Tir validé")]["Score"].sum()) if not detail.empty else 0
+        shots = int(len(detail[(detail["Série"] == s) & (detail["Type"] == "Tir validé")])) if not detail.empty else 0
+        rests_from_aim = int(len(detail[(detail["Série"] == s) & (detail["Type"] == "Visée reposée")])) if not detail.empty else 0
+        total_general += score
+        summary_rows.append({
+            "Bloc": b,
+            "Série": s,
+            "Nb tirs validés": shots,
+            "Nb visées reposées": rests_from_aim,
+            "Score série": score,
+        })
+
+    summary = pd.DataFrame(summary_rows)
+    block_summary = summary.groupby("Bloc", as_index=False).agg({"Score série": "sum"})
+    block_summary = block_summary.rename(columns={"Score série": "Total bloc /200"})
+    general = pd.DataFrame([{"Total général /600": total_general}])
+
+    output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        actions.to_excel(writer, sheet_name="Actions détaillées", index=False)
-        all_series_summary_df().to_excel(writer, sheet_name="Résumé séries", index=False)
-        pd.DataFrame(session_rows).to_excel(writer, sheet_name="Résumé session", index=False)
-    return output.getvalue()
+        detail.to_excel(writer, index=False, sheet_name="Données détaillées")
+        summary.to_excel(writer, index=False, sheet_name="Résumé séries")
+        block_summary.to_excel(writer, index=False, sheet_name="Résumé blocs")
+        general.to_excel(writer, index=False, sheet_name="Total")
+    output.seek(0)
+    return output
 
 
-def render_metrics(summary: dict[str, Any]) -> None:
-    cols = st.columns(5)
-    cols[0].metric("Score série", summary["Score total"])
-    cols[1].metric("Tirs validés", summary["Tirs validés"])
-    cols[2].metric("Nombre de X", summary["Nombre de X"])
-    cols[3].metric("Repos moyen", fmt_seconds(summary["Temps moyen repos"]))
-    cols[4].metric("Visée moyenne", fmt_seconds(summary["Temps moyen visée"]))
+init_state()
 
+st.title("🎯 Suivi de match - Tir sportif")
+st.caption("Premier jet : chrono repos, chrono visée/tir, tir validé ou visée reposée, puis export Excel.")
 
-def render_status() -> None:
-    phase = st.session_state.phase
-    status = PHASE_LABELS.get(phase, phase)
-    st.subheader(status)
+# -------------------------
+# Session info
+# -------------------------
+with st.sidebar:
+    st.header("Session")
+    st.session_state.shooter = st.text_input("Nom du tireur / de la tireuse", value=st.session_state.shooter)
+    st.session_state.competition = st.text_input("Compétition", value=st.session_state.competition)
+    st.session_state.session_date = st.date_input("Date", value=st.session_state.session_date)
 
-    if st.session_state.current_series:
-        st.caption(f"Série actuelle : {st.session_state.current_series}")
-
-    if phase == "rest_running":
-        st.info(f"Chrono repos du prochain tir : {fmt_seconds(elapsed_seconds(st.session_state.rest_start))}")
-    elif phase == "aim_running":
-        st.info(
-            "Repos enregistré : "
-            f"{fmt_seconds(st.session_state.pending_rest_seconds)} | "
-            f"Chrono visée : {fmt_seconds(elapsed_seconds(st.session_state.aim_start))}"
-        )
-
-
-def render_pending_x() -> None:
-    if not has_pending_x():
-        return
-
-    action = st.session_state.actions[st.session_state.pending_x_index]
-    st.warning(
-        f"Mouche à compléter pour l'action {action['Action n°']}. "
-        "Le repos du tir suivant est déjà en cours."
-    )
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        mouche_score = st.number_input(
-            "Valeur de la mouche",
-            min_value=0.0,
-            max_value=10.9,
-            value=10.0,
-            step=0.1,
-            format="%.1f",
-            key=f"mouche_score_{st.session_state.pending_x_index}",
-        )
-    with col2:
-        st.write("")
-        st.write("")
-        if st.button("Valider la mouche", type="primary", use_container_width=True):
-            validate_pending_x(float(mouche_score))
-            st.rerun()
-
-
-def render_session_form() -> None:
-    with st.sidebar:
-        st.header("Session")
-        st.text_input("Nom de l'athlète", key="athlete_name")
-        st.date_input("Date", key="session_date")
-        st.text_input("Compétition", key="competition")
-        st.text_area("Commentaire", key="session_comment", height=100)
-
-        st.divider()
-        st.checkbox("Confirmer la réinitialisation", key="confirm_reset")
-        if st.button(
-            "Réinitialiser toute la session",
-            type="secondary",
-            use_container_width=True,
-            disabled=not st.session_state.confirm_reset,
-        ):
-            reset_session()
-            st.rerun()
-
-
-def render_finish_button(container: Any) -> None:
-    disabled = has_pending_x()
-    if container.button("Fin de série", type="secondary", use_container_width=True, disabled=disabled):
-        finish_series()
+    st.divider()
+    if st.button("🔄 Réinitialiser toute la session", use_container_width=True):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
         st.rerun()
-    if disabled:
-        container.caption("Validez d'abord la mouche en attente.")
 
+# -------------------------
+# Main status
+# -------------------------
+col_a, col_b, col_c, col_d = st.columns(4)
+col_a.metric("Bloc", st.session_state.current_block)
+col_b.metric("Série", f"{st.session_state.current_series}/6")
+col_c.metric("Tirs validés", f"{current_series_shots()}/10")
+col_d.metric("Score série", f"{current_series_score()}/100")
 
-def render_controls() -> None:
-    phase = st.session_state.phase
+phase_label = {
+    "idle": "En attente",
+    "rest": "Repos en cours",
+    "aim": "Visée / tir en cours",
+}[st.session_state.phase]
 
-    if phase == "no_series":
-        if st.button("Commencer une nouvelle série", type="primary", use_container_width=True):
-            start_new_series()
-            st.rerun()
-        return
+st.subheader(f"État : {phase_label}")
+if st.session_state.phase in ["rest", "aim"]:
+    st.info(f"Chrono actuel : {elapsed_seconds()} secondes")
 
-    if phase == "session_finished":
-        return
+# Auto refresh while timer runs
+if st.session_state.phase in ["rest", "aim"]:
+    time.sleep(1)
+    st.rerun()
 
-    if phase == "series_ready":
-        col1, col2 = st.columns(2)
-        if col1.button("Démarrer repos", type="primary", use_container_width=True):
-            start_next_rest()
-            st.rerun()
-        render_finish_button(col2)
+# -------------------------
+# Action buttons
+# -------------------------
+st.divider()
 
-    elif phase == "rest_running":
-        col1, col2, col3 = st.columns(3)
-        if col1.button("Fin repos / Démarrer visée", type="primary", use_container_width=True):
-            switch_to_aim()
-            st.rerun()
-        if col2.button(
-            "Annuler dernière action",
-            use_container_width=True,
-            disabled=not bool(current_series_actions()),
-        ):
-            undo_last_action()
-            st.rerun()
-        render_finish_button(col3)
+if st.session_state.phase == "idle":
+    if st.button("▶️ Démarrer repos", type="primary", use_container_width=True):
+        st.session_state.phase = "rest"
+        st.session_state.phase_start = time.time()
+        st.rerun()
 
-    elif phase == "aim_running":
-        st.write("Résultat du tir")
-        cols = st.columns(4)
-        pending_x = has_pending_x()
-        for index, result in enumerate(RESULTS):
-            with cols[index % 4]:
-                if st.button(f"Résultat {result}", use_container_width=True, disabled=result == "X" and pending_x):
-                    if result == "X":
-                        add_pending_x()
-                    else:
-                        add_action(result, int(result), "Tir validé")
-                    st.rerun()
+elif st.session_state.phase == "rest":
+    if st.button("🎯 Fin repos / Démarrer visée", type="primary", use_container_width=True):
+        st.session_state.last_rest_seconds = elapsed_seconds()
+        st.session_state.phase = "aim"
+        st.session_state.phase_start = time.time()
+        st.rerun()
 
-        col1, col2 = st.columns(2)
-        if col1.button("Reposée sans tirer", type="secondary", use_container_width=True):
-            add_action("R", None, "Visée reposée")
-            st.rerun()
-        render_finish_button(col2)
+elif st.session_state.phase == "aim":
+    st.write("Quand la personne tire, clique sur le résultat. Si elle lève, vise, puis décide de reposer sans tirer, clique sur **Visée reposée**.")
 
-    elif phase == "series_finished":
-        st.success("Série terminée. Voulez-vous commencer une nouvelle série ?")
-        col1, col2 = st.columns(2)
-        if col1.button("Oui", type="primary", use_container_width=True):
-            start_new_series()
-            st.rerun()
-        if col2.button("Non", type="secondary", use_container_width=True):
-            st.session_state.phase = "session_finished"
+    result_cols = st.columns(7)
+    results = ["X", "10", "9", "8", "7", "6", "5"]
+    for col, result in zip(result_cols, results):
+        if col.button(result, use_container_width=True):
+            aim = elapsed_seconds()
+            add_event(
+                event_type="Tir validé",
+                result=result,
+                rest_seconds=st.session_state.last_rest_seconds,
+                aim_seconds=aim,
+                score=score_value(result),
+            )
+            st.session_state.phase = "idle"
+            st.session_state.phase_start = None
+            st.session_state.last_rest_seconds = 0
             st.rerun()
 
+    if st.button("⭕ Visée reposée sans tirer", use_container_width=True):
+        aim = elapsed_seconds()
+        add_event(
+            event_type="Visée reposée",
+            result="R",
+            rest_seconds=st.session_state.last_rest_seconds,
+            aim_seconds=aim,
+            score=0,
+        )
+        # Après une visée reposée, on repart directement sur un repos.
+        st.session_state.phase = "rest"
+        st.session_state.phase_start = time.time()
+        st.session_state.last_rest_seconds = 0
+        st.rerun()
 
-def render_current_series() -> None:
-    if not st.session_state.current_series:
-        return
+# -------------------------
+# Series controls
+# -------------------------
+st.divider()
+ctrl1, ctrl2, ctrl3 = st.columns(3)
 
-    serie_actions = current_series_actions()
-    st.divider()
-    st.subheader(f"Série {st.session_state.current_series}")
-    render_metrics(series_summary(serie_actions))
+if ctrl1.button("✅ Terminer série / passer à la suivante", use_container_width=True):
+    go_next_series()
+    st.rerun()
 
-    st.write("Actions de la série en cours")
-    st.dataframe(display_actions_df(serie_actions), use_container_width=True, hide_index=True)
+if ctrl2.button("↩️ Annuler dernière action", use_container_width=True):
+    if st.session_state.events:
+        st.session_state.events.pop()
+    st.rerun()
 
+if ctrl3.button("⏸️ Stop chrono", use_container_width=True):
+    st.session_state.phase = "idle"
+    st.session_state.phase_start = None
+    st.session_state.last_rest_seconds = 0
+    st.rerun()
 
-def render_global_summary() -> None:
-    st.divider()
-    st.subheader("Résumé global")
-    summary = session_summary()
-    cols = st.columns(4)
-    cols[0].metric("Score total", summary["Score total"])
-    cols[1].metric("Séries", summary["Nombre total de séries"])
-    cols[2].metric("Tirs validés", summary["Tirs validés"])
-    cols[3].metric("Total X", summary["Nombre total de X"])
+# -------------------------
+# Data display
+# -------------------------
+st.divider()
+st.subheader("Données enregistrées")
 
-    st.dataframe(all_series_summary_df(), use_container_width=True, hide_index=True)
+if st.session_state.events:
+    df = pd.DataFrame(st.session_state.events)
+    st.dataframe(df, use_container_width=True)
 
-    athlete = st.session_state.athlete_name.strip() or "session"
-    filename = f"suivi_match_{athlete}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx".replace(" ", "_")
-    st.download_button( 
-        "Télécharger le fichier Excel",
-        data=excel_bytes(),
+    excel_file = make_excel()
+    filename = f"suivi_tir_{st.session_state.shooter or 'tireur'}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+    st.download_button(
+        "📥 Télécharger le fichier Excel",
+        data=excel_file,
         file_name=filename,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary",
         use_container_width=True,
     )
-
-
-def main() -> None:
-    st.set_page_config(page_title="Suivi match", page_icon="target", layout="wide")
-    init_state()
-
-    st.markdown(
-        """
-        <style>
-        div.stButton > button, div.stDownloadButton > button {
-            min-height: 3rem;
-            font-size: 1.05rem;
-            font-weight: 700;
-        }
-        [data-testid="stMetricValue"] {
-            font-size: 1.7rem;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    render_session_form()
-
-    st.title("Suivi de match")
-    render_status()
-    render_pending_x()
-    render_controls()
-    render_current_series()
-
-    if st.session_state.phase == "session_finished":
-        render_global_summary()
-
-
-if __name__ == "__main__":
-    main()
+else:
+    st.write("Aucune donnée pour le moment.")

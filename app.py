@@ -438,11 +438,19 @@ def render_status() -> None:
     if phase == "rest_running":
         st.info(f"Chrono repos du prochain tir commencé")
     elif phase == "aim_running":
-        st.info(
-            f"{st.session_state.current_aim_type} | "
-            f"Repos enregistré : {fmt_seconds(st.session_state.pending_rest_seconds)} | "
-            f"Chrono visée commencé"
-        )
+        if st.session_state.current_aim_type == "Visée":
+            col1, col2 = st.columns(2)
+            if col1.button("Tir", type="primary", use_container_width=True):
+                prepare_score_choice()
+                st.rerun()
+            if col2.button("Repos sans tirer", type="secondary", use_container_width=True):
+                save_rest_without_shot()
+                st.rerun()
+    
+        else:  # Visée main faible
+            if st.button("Repos sans tirer", type="secondary", use_container_width=True):
+                save_rest_without_shot()
+                st.rerun()
     elif phase in {"score_choice", "low_score_choice"}:
         st.info(f"Temps de visée enregistré : {fmt_seconds(st.session_state.pending_aim_seconds)}")
 
